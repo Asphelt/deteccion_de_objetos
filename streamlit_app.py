@@ -1,13 +1,10 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
-import numpy as np
 from ultralytics import YOLO
+from PIL import Image, ImageDraw
+import numpy as np
 import io
 
-# <CHANGE> Reemplazar cv2 con PIL para evitar errores de libGL
-# PIL no requiere dependencias gráficas del sistema
-
-# Configurar página de Streamlit
+# Configuración de la página
 st.set_page_config(
     page_title="Detección de Objetos Urbanos",
     page_icon="🚗",
@@ -19,165 +16,163 @@ st.set_page_config(
 st.markdown("""
     <style>
         .main {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
         }
         .metric-card {
-            background-color: white;
+            background: rgba(255, 255, 255, 0.1);
             padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-        h1 {
+            border-left: 4px solid #00d4ff;
             color: white;
-            text-align: center;
-            margin-bottom: 30px;
         }
-        h2 {
-            color: white;
-            margin-top: 20px;
+        h1, h2, h3 {
+            color: #00d4ff;
         }
     </style>
 """, unsafe_allow_html=True)
 
 # Título principal
-st.markdown("<h1>🚗 Detección de Objetos en Escenas Urbanas</h1>", unsafe_allow_html=True)
+st.title("🚗 Detección de Objetos en Escenas Urbanas")
+st.markdown("Carga una imagen de una calle y detecta automáticamente carros, peatones, semáforos y más")
+
+# Sidebar para configuración
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    confidence_threshold = st.slider(
+        "Confianza de detección",
+        min_value=0.1,
+        max_value=1.0,
+        value=0.5,
+        step=0.05,
+        help="Mayor valor = detecciones más precisas pero menos sensibles"
+    )
+    
+    st.markdown("---")
+    st.markdown("""
+    ### Información del modelo
+    - **Modelo:** YOLOv11
+    - **Objetos detectados:**
+      - Carros (car)
+      - Autobuses (bus)
+      - Camiones (truck)
+      - Peatones (person)
+      - Semáforos (traffic light)
+      - Motocicletas (motorcycle)
+    """)
 
 # Cargar modelo YOLO
 @st.cache_resource
 def load_model():
-    return YOLO("yolov8n.pt")
+    return YOLO("yolov11n.pt")
 
 model = load_model()
 
-# Mapeo de clases relevantes para escenas urbanas
-URBAN_CLASSES = {
-    2: {"nombre": "Carro", "color": (255, 0, 0)},
-    3: {"nombre": "Moto", "color": (0, 255, 0)},
-    5: {"nombre": "Bus", "color": (255, 165, 0)},
-    7: {"nombre": "Camión", "color": (255, 0, 255)},
-    0: {"nombre": "Persona", "color": (0, 0, 255)},
-    9: {"nombre": "Semáforo", "color": (255, 255, 0)},
+# Mapeo de clases a colores y etiquetas en español
+class_mapping = {
+    2: {"name": "Carro", "color": (255, 0, 0)},  # Rojo
+    5: {"name": "Autobús", "color": (0, 255, 255)},  # Cian
+    7: {"name": "Camión", "color": (255, 165, 0)},  # Naranja
+    0: {"name": "Persona", "color": (0, 255, 0)},  # Verde
+    9: {"name": "Semáforo", "color": (255, 255, 0)},  # Amarillo
+    3: {"name": "Motocicleta", "color": (255, 0, 255)},  # Magenta
 }
 
-# Sidebar para control de parámetros
-st.sidebar.markdown("## ⚙️ Configuración")
-confidence = st.sidebar.slider(
-    "Nivel de Confianza",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.5,
-    step=0.05,
-    help="Ajusta la sensibilidad de detección"
-)
-
-# Subir imagen
-st.markdown("<h2>📤 Carga tu imagen</h2>", unsafe_allow_html=True)
+# Área de carga de imagen
+st.markdown("### 📸 Cargar Imagen")
 uploaded_file = st.file_uploader(
     "Selecciona una imagen de una calle",
-    type=["jpg", "jpeg", "png", "bmp"]
+    type=["jpg", "jpeg", "png", "bmp"],
+    help="Soporta formatos: JPG, PNG, BMP"
 )
 
 if uploaded_file is not None:
-    # Abrir imagen con PIL
+    # Cargar imagen
     image = Image.open(uploaded_file).convert("RGB")
     image_array = np.array(image)
     
     # Realizar detección
-    with st.spinner("Procesando imagen..."):
-        results = model(image_array, conf=confidence)
+    with st.spinner("Detectando objetos..."):
+        results = model(image_array, conf=confidence_threshold, verbose=False)
     
     # Procesar resultados
-    detections = {}
+    detection_counts = {}
+    detections_list = []
     
-    if results[0].boxes is not None:
-        for box in results[0].boxes:
+    for result in results:
+        boxes = result.boxes
+        for box in boxes:
             class_id = int(box.cls[0])
-            confidence_score = float(box.conf[0])
+            confidence = float(box.conf[0])
             
-            if class_id in URBAN_CLASSES:
-                class_name = URBAN_CLASSES[class_id]["nombre"]
-                if class_name not in detections:
-                    detections[class_name] = []
+            if class_id in class_mapping:
+                class_name = class_mapping[class_id]["name"]
                 
-                # Guardar coordenadas normalizadas
-                coords = box.xyxy[0].cpu().numpy()
-                detections[class_name].append({
-                    "coords": coords,
-                    "confidence": confidence_score
+                # Contar objetos
+                detection_counts[class_name] = detection_counts.get(class_name, 0) + 1
+                
+                # Guardar detalles
+                detections_list.append({
+                    "Objeto": class_name,
+                    "Confianza": f"{confidence:.2%}",
+                    "Coordenadas": f"({int(box.xyxy[0][0])}, {int(box.xyxy[0][1])})"
                 })
     
-    # Dibujar cajas en la imagen
+    # Dibujar cajas de detección
     image_with_boxes = image.copy()
     draw = ImageDraw.Draw(image_with_boxes)
     
-    for class_name, boxes in detections.items():
-        color = URBAN_CLASSES[list(URBAN_CLASSES.keys())[list([v["nombre"] for v in URBAN_CLASSES.values()]).index(class_name)]]["color"]
-        
-        for box_data in boxes:
-            x1, y1, x2, y2 = box_data["coords"]
+    for result in results:
+        boxes = result.boxes
+        for box in boxes:
+            class_id = int(box.cls[0])
+            confidence = float(box.conf[0])
             
-            # Dibujar rectángulo
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
-            
-            # Dibujar etiqueta
-            label = f"{class_name} ({box_data['confidence']:.2f})"
-            draw.text((x1, y1 - 10), label, fill=color)
+            if class_id in class_mapping:
+                color = class_mapping[class_id]["color"]
+                class_name = class_mapping[class_id]["name"]
+                
+                # Coordenadas
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                
+                # Dibujar rectángulo
+                draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+                
+                # Dibujar etiqueta
+                label = f"{class_name} {confidence:.2%}"
+                draw.text((x1, y1 - 10), label, fill=color)
     
-    # Mostrar resultados
+    # Layout de dos columnas
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("<h3>📸 Imagen Original</h3>", unsafe_allow_html=True)
+        st.markdown("### Imagen Original")
         st.image(image, use_column_width=True)
     
     with col2:
-        st.markdown("<h3>✅ Detecciones</h3>", unsafe_allow_html=True)
+        st.markdown("### Imagen con Detecciones")
         st.image(image_with_boxes, use_column_width=True)
     
     # Resumen de detecciones
-    st.markdown("<h2>📊 Resumen de Objetos Detectados</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("### 📊 Resumen de Detecciones")
     
-    if detections:
-        # Crear columnas para métricas
-        cols = st.columns(len(detections))
+    if detection_counts:
+        # Mostrar contadores en tarjetas
+        cols = st.columns(len(detection_counts))
+        for (obj_name, count), col in zip(detection_counts.items(), cols):
+            with col:
+                st.metric(label=obj_name, value=count)
         
-        resumen_text = "Detectados: "
-        for idx, (class_name, boxes) in enumerate(detections.items()):
-            count = len(boxes)
-            resumen_text += f"{count} {class_name}{'s' if count != 1 else ''}"
-            if idx < len(detections) - 1:
-                resumen_text += ", "
-            
-            # Mostrar métrica
-            with cols[idx]:
-                st.metric(
-                    label=class_name,
-                    value=count,
-                    label_visibility="visible"
-                )
-        
-        # Mostrar resumen en texto
-        st.info(f"✨ {resumen_text}")
+        # Resumen en texto
+        summary_text = ", ".join([f"{count} {name}{'s' if count > 1 else ''}" 
+                                  for name, count in detection_counts.items()])
+        st.success(f"✅ Detectados: {summary_text}")
         
         # Tabla detallada
-        st.markdown("<h3>📋 Detalles de Confianza</h3>", unsafe_allow_html=True)
-        
-        detailed_data = []
-        for class_name, boxes in detections.items():
-            for i, box_data in enumerate(boxes):
-                detailed_data.append({
-                    "Objeto": class_name,
-                    "Número": i + 1,
-                    "Confianza": f"{box_data['confidence']:.2%}"
-                })
-        
-        if detailed_data:
-            st.dataframe(detailed_data, use_container_width=True)
-    
+        if detections_list:
+            st.markdown("### 📋 Detalles de Detecciones")
+            st.dataframe(detections_list, use_container_width=True)
     else:
-        st.warning("⚠️ No se detectaron objetos en la imagen. Intenta con otra o ajusta el nivel de confianza.")
-
+        st.warning("⚠️ No se detectaron objetos en la imagen. Intenta ajustar la confianza de detección.")
 else:
-    st.info("👈 Carga una imagen para comenzar la detección de objetos")
+    st.info("👆 Carga una imagen para comenzar la detección de objetos")
