@@ -1,257 +1,183 @@
 import streamlit as st
-import cv2
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+import numpy as np
 from ultralytics import YOLO
-import os
-from pathlib import Path
+import io
 
-# Configuración de página
+# <CHANGE> Reemplazar cv2 con PIL para evitar errores de libGL
+# PIL no requiere dependencias gráficas del sistema
+
+# Configurar página de Streamlit
 st.set_page_config(
-    page_title="Detector de Objetos Urbanos",
+    page_title="Detección de Objetos Urbanos",
     page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados
+# Estilos personalizados
 st.markdown("""
     <style>
-    .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    .stApp {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    .metric-card {
-        background: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        text-align: center;
-    }
-    .title-section {
-        background: rgba(255,255,255,0.95);
-        padding: 30px;
-        border-radius: 15px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
-    }
-    h1 {
-        color: #667eea;
-        font-weight: 700;
-        margin: 0;
-    }
-    h3 {
-        color: #764ba2;
-    }
+        .main {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        .metric-card {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: white;
+            margin-top: 20px;
+        }
     </style>
 """, unsafe_allow_html=True)
 
-# Colores para diferentes tipos de objetos
-COLORS = {
-    "car": (0, 255, 0),           # Verde
-    "person": (255, 0, 0),        # Rojo
-    "traffic light": (0, 165, 255),  # Naranja
-    "bus": (0, 255, 255),         # Amarillo
-    "truck": (128, 0, 255),       # Magenta
-}
-
-# Mapeo de nombres de clases de COCO
-CLASS_NAMES = {
-    2: "car",
-    3: "motorbike",
-    5: "bus",
-    7: "truck",
-    0: "person",
-    9: "traffic light",
-}
+# Título principal
+st.markdown("<h1>🚗 Detección de Objetos en Escenas Urbanas</h1>", unsafe_allow_html=True)
 
 # Cargar modelo YOLO
 @st.cache_resource
 def load_model():
-    """Cargar modelo YOLO11 con caché"""
-    try:
-        model = YOLO("yolo11n.pt")
-        return model
-    except Exception as e:
-        st.error(f"Error al cargar el modelo: {e}")
-        return None
+    return YOLO("yolov8n.pt")
 
-def process_image(image, model):
-    """Procesar imagen y detectar objetos"""
-    # Convertir PIL Image a numpy array
-    img_np = np.array(image)
-    
-    # Realizar predicción
-    results = model.predict(img_np, conf=0.25, verbose=False)
-    
-    return results
-
-def draw_detections(image, results):
-    """Dibujar cajas de detección en la imagen"""
-    img_draw = image.copy()
-    draw = ImageDraw.Draw(img_draw)
-    
-    detections = {
-        "car": 0,
-        "person": 0,
-        "traffic light": 0,
-        "bus": 0,
-        "truck": 0,
-        "motorbike": 0,
-    }
-    
-    # Procesar detecciones
-    if results and len(results) > 0:
-        result = results[0]
-        boxes = result.boxes
-        
-        for box in boxes:
-            # Obtener coordenadas
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            conf = box.conf[0]
-            class_id = int(box.cls[0])
-            
-            # Obtener nombre de clase
-            class_name = CLASS_NAMES.get(class_id, f"class_{class_id}")
-            if class_name in detections:
-                detections[class_name] += 1
-            
-            # Seleccionar color
-            color = COLORS.get(class_name, (255, 255, 255))
-            
-            # Dibujar rectángulo
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
-            
-            # Dibujar etiqueta
-            label = f"{class_name} {conf:.2f}"
-            draw.text((x1, y1 - 10), label, fill=color, font=None)
-    
-    return img_draw, detections
-
-# Título y descripción
-st.markdown("""
-    <div class="title-section">
-        <h1>🚗 Detector de Objetos en Escenas Urbanas</h1>
-        <p style="color: #666; font-size: 16px; margin: 10px 0 0 0;">
-            Detecta automáticamente coches, peatones, semáforos y más en tus imágenes de calles.
-        </p>
-    </div>
-""", unsafe_allow_html=True)
-
-# Cargar modelo
 model = load_model()
 
-if model is None:
-    st.error("No se pudo cargar el modelo. Verifica que ultralytics esté instalado correctamente.")
-    st.stop()
+# Mapeo de clases relevantes para escenas urbanas
+URBAN_CLASSES = {
+    2: {"nombre": "Carro", "color": (255, 0, 0)},
+    3: {"nombre": "Moto", "color": (0, 255, 0)},
+    5: {"nombre": "Bus", "color": (255, 165, 0)},
+    7: {"nombre": "Camión", "color": (255, 0, 255)},
+    0: {"nombre": "Persona", "color": (0, 0, 255)},
+    9: {"nombre": "Semáforo", "color": (255, 255, 0)},
+}
 
-# Sección de carga de imagen
-col1, col2 = st.columns([2, 1])
+# Sidebar para control de parámetros
+st.sidebar.markdown("## ⚙️ Configuración")
+confidence = st.sidebar.slider(
+    "Nivel de Confianza",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.5,
+    step=0.05,
+    help="Ajusta la sensibilidad de detección"
+)
 
-with col1:
-    st.subheader("📤 Cargar Imagen")
-    uploaded_file = st.file_uploader(
-        "Sube una imagen de una calle",
-        type=["jpg", "jpeg", "png", "bmp"],
-        help="La imagen será procesada para detectar objetos urbanos"
-    )
+# Subir imagen
+st.markdown("<h2>📤 Carga tu imagen</h2>", unsafe_allow_html=True)
+uploaded_file = st.file_uploader(
+    "Selecciona una imagen de una calle",
+    type=["jpg", "jpeg", "png", "bmp"]
+)
 
-with col2:
-    st.subheader("⚙️ Configuración")
-    confidence = st.slider("Confianza mínima", 0.1, 1.0, 0.25, 0.05)
-
-# Procesar imagen
 if uploaded_file is not None:
-    # Cargar imagen
+    # Abrir imagen con PIL
     image = Image.open(uploaded_file).convert("RGB")
+    image_array = np.array(image)
     
-    # Mostrar imagen original
-    col_original, col_result = st.columns(2)
+    # Realizar detección
+    with st.spinner("Procesando imagen..."):
+        results = model(image_array, conf=confidence)
     
-    with col_original:
-        st.subheader("Imagen Original")
+    # Procesar resultados
+    detections = {}
+    
+    if results[0].boxes is not None:
+        for box in results[0].boxes:
+            class_id = int(box.cls[0])
+            confidence_score = float(box.conf[0])
+            
+            if class_id in URBAN_CLASSES:
+                class_name = URBAN_CLASSES[class_id]["nombre"]
+                if class_name not in detections:
+                    detections[class_name] = []
+                
+                # Guardar coordenadas normalizadas
+                coords = box.xyxy[0].cpu().numpy()
+                detections[class_name].append({
+                    "coords": coords,
+                    "confidence": confidence_score
+                })
+    
+    # Dibujar cajas en la imagen
+    image_with_boxes = image.copy()
+    draw = ImageDraw.Draw(image_with_boxes)
+    
+    for class_name, boxes in detections.items():
+        color = URBAN_CLASSES[list(URBAN_CLASSES.keys())[list([v["nombre"] for v in URBAN_CLASSES.values()]).index(class_name)]]["color"]
+        
+        for box_data in boxes:
+            x1, y1, x2, y2 = box_data["coords"]
+            
+            # Dibujar rectángulo
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+            
+            # Dibujar etiqueta
+            label = f"{class_name} ({box_data['confidence']:.2f})"
+            draw.text((x1, y1 - 10), label, fill=color)
+    
+    # Mostrar resultados
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("<h3>📸 Imagen Original</h3>", unsafe_allow_html=True)
         st.image(image, use_column_width=True)
     
-    # Procesamiento
-    with st.spinner("🔍 Detectando objetos..."):
-        results = model.predict(np.array(image), conf=confidence, verbose=False)
-        image_result, detections = draw_detections(image, results)
+    with col2:
+        st.markdown("<h3>✅ Detecciones</h3>", unsafe_allow_html=True)
+        st.image(image_with_boxes, use_column_width=True)
     
-    with col_result:
-        st.subheader("Objetos Detectados")
-        st.image(image_result, use_column_width=True)
+    # Resumen de detecciones
+    st.markdown("<h2>📊 Resumen de Objetos Detectados</h2>", unsafe_allow_html=True)
     
-    # Mostrar resumen de detecciones
-    st.markdown("---")
-    st.subheader("📊 Resumen de Detecciones")
+    if detections:
+        # Crear columnas para métricas
+        cols = st.columns(len(detections))
+        
+        resumen_text = "Detectados: "
+        for idx, (class_name, boxes) in enumerate(detections.items()):
+            count = len(boxes)
+            resumen_text += f"{count} {class_name}{'s' if count != 1 else ''}"
+            if idx < len(detections) - 1:
+                resumen_text += ", "
+            
+            # Mostrar métrica
+            with cols[idx]:
+                st.metric(
+                    label=class_name,
+                    value=count,
+                    label_visibility="visible"
+                )
+        
+        # Mostrar resumen en texto
+        st.info(f"✨ {resumen_text}")
+        
+        # Tabla detallada
+        st.markdown("<h3>📋 Detalles de Confianza</h3>", unsafe_allow_html=True)
+        
+        detailed_data = []
+        for class_name, boxes in detections.items():
+            for i, box_data in enumerate(boxes):
+                detailed_data.append({
+                    "Objeto": class_name,
+                    "Número": i + 1,
+                    "Confianza": f"{box_data['confidence']:.2%}"
+                })
+        
+        if detailed_data:
+            st.dataframe(detailed_data, use_container_width=True)
     
-    # Crear columnas para las métricas
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    
-    metrics_data = [
-        ("🚗 Carros", detections["car"], col1),
-        ("👥 Peatones", detections["person"], col2),
-        ("🚦 Semáforos", detections["traffic light"], col3),
-        ("🚌 Buses", detections["bus"], col4),
-        ("🚚 Camiones", detections["truck"], col5),
-        ("🏍️ Motos", detections["motorbike"], col6),
-    ]
-    
-    for label, count, col in metrics_data:
-        with col:
-            st.metric(label, count)
-    
-    # Resumen en texto
-    total = sum(detections.values())
-    detected_items = ", ".join([
-        f"{count} {label.lower()}" 
-        for label, count in detections.items() 
-        if count > 0
-    ])
-    
-    if detected_items:
-        summary = f"**Resumen:** Detectados {total} objetos - {detected_items}"
     else:
-        summary = "**Resumen:** No se detectaron objetos en la imagen"
-    
-    st.info(summary)
-    
-    # Detalles técnicos
-    with st.expander("ℹ️ Detalles Técnicos"):
-        col_tech1, col_tech2 = st.columns(2)
-        with col_tech1:
-            st.write(f"**Modelo:** YOLO11n")
-            st.write(f"**Confianza:** {confidence}")
-        with col_tech2:
-            st.write(f"**Tamaño de imagen:** {image.size[0]}x{image.size[1]}")
-            st.write(f"**Total detectado:** {total} objetos")
+        st.warning("⚠️ No se detectaron objetos en la imagen. Intenta con otra o ajusta el nivel de confianza.")
 
 else:
-    # Mensaje inicial
-    st.markdown("""
-        <div style="text-align: center; padding: 50px 20px; background: rgba(255,255,255,0.1); border-radius: 10px; color: white;">
-            <h3>👆 Comienza subiendo una imagen de una calle</h3>
-            <p>Soporta formatos: JPG, JPEG, PNG, BMP</p>
-            <p>La app detectará automáticamente:</p>
-            <ul style="list-style: none; padding: 20px 0;">
-                <li>🚗 Coches y vehículos</li>
-                <li>👥 Peatones</li>
-                <li>🚦 Semáforos</li>
-                <li>🚌 Buses</li>
-                <li>🚚 Camiones</li>
-            </ul>
-        </div>
-    """, unsafe_allow_html=True)
-
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    <div style="text-align: center; color: white; padding: 20px;">
-        <p>Powered by YOLO11 • Detección de objetos en tiempo real</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    st.info("👈 Carga una imagen para comenzar la detección de objetos")
